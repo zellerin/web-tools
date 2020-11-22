@@ -5,7 +5,9 @@
   (assocd)
   (map-tree-if)
   (get-authinfo)
-  (symbol-to-camelcase))
+  (symbol-to-camelcase)
+  (normalize-symbol)
+  (clist-to-llist))
 
 (declaim (inline assocd))
 
@@ -15,10 +17,17 @@ FIXME: this must be in some standard library, but I can't find it."
   (cdr (apply #'assoc item alist pars)))
 
 (defun clist-to-llist (object)
-      (mapcar (lambda (a) (list (car a) (cdr a))) object))
+  "Convert list of conses (e.g., used by hunchentoot) to list of lists
+  (e.g., used for display in org mode)."
+  (mapcar (lambda (a) (list (car a) (cdr a))) object))
 
 ;;;; Converting symbols to strings
 (defun normalize-symbol (out symbol &optional colon at-sign prefix &rest args)
+  "Print to OUT stream SYMBOL converted to camelcase notation.
+
+- The letter after dash is capitalized.
+- Two dashes make dash and next letter capitalized.
+- First letter is capital if COLON is set."
   (declare (ignore args at-sign))
   (with-input-from-string (in (symbol-name symbol))
     (when prefix (write-char prefix out))
@@ -40,6 +49,8 @@ FIXME: this must be in some standard library, but I can't find it."
 		(setf capital nil))))))
 
 (defun symbol-to-camelcase (symbol &rest args)
+  "Generate camelcase name string from symbol. See normalize symbol for
+  details."
   (with-output-to-string (s)
     (apply #'normalize-symbol s symbol args)))
 
@@ -195,6 +206,7 @@ No fancy uri-like interpolation."
 (define-section @html-parsing
   "Functions to extract text and forms from a HTML.
 
+
 Conventions:
 - Input of the functions is typically parsed HTML. If full HTML
   document is expected, (last-html) is default input."
@@ -259,22 +271,31 @@ Designed to be passed to `MAP-TREE-IF' as its CONDITION parameter."
   (map-tree-if (tag-matcher :form) parsed-html))
 
 (defun collect-hidden-parameters (&optional (form (car (collect-forms))))
-  "Return name and value of all hidden form parameters."
-
+  "Return name and value of all hidden parameters of parsed FORM, by
+  default first form of last HTML page."
   (map-tree-if (tag-matcher :input :type "hidden") form
 	       (lambda (a)
 		 (list (cons (getf (cdar a) :name)
 			     (decode-entities (getf (cdar a) :value)))))))
 
 (defun collect-unhidden-parameters (&optional (form (car (collect-forms))))
+  "Collect visible (not hidden) parameters of parsed form, by default
+first form of last HTML page loaded."
   (map-tree-if (tag-matcher :input) form
 	       (lambda (form)
 		 (unless (equalp (html-tag-attr form :type) "hidden")
 		   (list (html-tag-attr form :name))))))
 
-(defun html-post-form (&key (base *last-page-base*) (element (car (collect-forms))) pars)
-  "Post "
-  (http-request* (puri:merge-uris (html-tag-attr element :action ".") base)
+(defun html-post-form (&key (base *last-page-base*) (form (car (collect-forms))) pars)
+  "Post a FORM with new parameters.
+
+The FORM is by default first form of last HTML page.
+
+BASE is used as base if the :action in the form is relative.
+
+PARS is a list of (key . value) conses to be used as
+parameters. Hidden parameters are included implicitly."
+  (http-request* (puri:merge-uris (html-tag-attr form :action ".") base)
 		 :method (find-symbol (string-upcase
-				       (html-tag-attr element :method "GET")) :keyword)
-	:parameters (append pars (collect-hidden-parameters element))))
+				       (html-tag-attr form :method "GET")) :keyword)
+	:parameters (append pars (collect-hidden-parameters form))))

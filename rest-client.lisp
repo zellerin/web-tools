@@ -15,7 +15,6 @@ added relatively easily to calls.
 "
   (define-rest-base)
   (define-endpoint)
-  (rest-query)
   (simple-rest-endpoint type)
   (json-api-error type))
 
@@ -50,8 +49,11 @@ added relatively easily to calls.
 		       :type (member :GET :POST)
 		       :documentation "HTTP method (verb) to use for the call.")
    (additional-headers :accessor get-additional-headers :initarg :additional-headers
-		       :documentation "HTTP headers added for, e.g., authentication. Note that *COOKIE-JAR* is used by default, so that cookies should not be needed.")
-   (BODY               :accessor get-body               :initarg :body)
+		       :documentation
+		       "HTTP headers added for, e.g., authentication. Note that
+		       *COOKIE-JAR* is used by default, so that cookies should not be
+		       needed.")
+   (body               :accessor get-body               :initarg :body)
    (content-type       :accessor get-content-type       :initarg :content-type))
   (:default-initargs :method :GET :body nil
 		     :content-type nil
@@ -63,17 +65,6 @@ added relatively easily to calls.
 (defgeneric post-process (type raw)
   (:method (type raw)
     raw))
-
-#+nil (defun decode-content-by-type (headers body)
-  (multiple-value-bind (type subtype)
-      (drakma::get-content-type headers)
-    (when (and type subtype
-	       (equal type "application")
-	       (equal subtype "json"))
-      (let ((json  (cl-json:decode-json-from-string body)))
-	(aif (assocd :errors json)
-	     (error "API error ~s" (cdr it))
-	     json)))))
 
 (defun rest-query (class &rest pars)
   (let ((e (apply 'make-instance class pars)))
