@@ -17,6 +17,28 @@ FIXME: this must be in some standard library, but I can't find it."
 (defun clist-to-llist (object)
       (mapcar (lambda (a) (list (car a) (cdr a))) object))
 
+;;;; Converting symbols to strings
+(defun normalize-symbol (out symbol &optional colon at-sign prefix &rest args)
+  (declare (ignore args at-sign))
+  (with-input-from-string (in (symbol-name symbol))
+    (when prefix (write-char prefix out))
+    (loop with capital = colon
+	  for c =(read-char in nil nil)
+	  while c
+	  do
+	     (case c
+	       ((#\-) ;; one dash makes next char capital
+		(if capital ;; two dashes make a dash and next capital
+		    (write-char c out)
+		    (setf capital t)))
+	       ((#\.)
+		(write-char c out)
+		(setf capital t))
+	       (t (write-char (if capital (char-upcase c)
+				  (char-downcase c))
+			      out)
+		(setf capital nil))))))
+
 (defun symbol-to-camelcase (symbol &rest args)
   (with-output-to-string (s)
     (apply #'normalize-symbol s symbol args)))
@@ -194,9 +216,9 @@ Note that uncommented CSS is included (maybe a bug)"
 		      ((atom tree) "")
 		      ((and (consp tree)
 			    (or
-			     (member (car tree) '(:script :comment :style))
+			     (member (car tree) '(:script :head :comment :style))
 			     (and (consp (car tree))
-				  (member (caar tree) '(:script :style)))))
+				  (member (caar tree) '(:script :head :style)))))
 		       nil)
 		      (t (apply 'concatenate 'string
 				(case (ca?r tree)

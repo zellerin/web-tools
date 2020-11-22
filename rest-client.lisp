@@ -17,10 +17,21 @@ added relatively easily to calls.
   (define-endpoint)
   (rest-query)
   (simple-rest-endpoint type)
+  (json-api-error type))
+
+(define-section @rest-client-features
+  "Generate functions that represent REST api calls.
+
+Supports parameters as HTTP parameters as well as part of URL.
+
+Represents individual API endpoints as CLOS classes, so that
+
+additional features (error detection and raising, json, ...) can be
+added relatively easily to calls.
+"
   (auth-header-mixin type)
   (bearer-header-mixin type)
   (json-content-mixin type)
-  (json-api-error)
   (json-checked-content-mixin type))
 
 (define-method-combination combine-uri () ((primary () :order :most-specific-last
@@ -80,7 +91,7 @@ added relatively easily to calls.
 						 (list p))
 						(symbol
 						 (when (slot-boundp e p)
-						   (list (cons (string-downcase (symbol-name p))
+						   (list (cons (symbol-to-camelcase p)
 							       (slot-value e p)))))))
 					    (get-parameters e))
 			:cookie-jar *cookie-jar*
@@ -111,55 +122,73 @@ added relatively easily to calls.
 (defgeneric get-parameters (e)
   (:method-combination append))
 
+(defun calculate-initializers-as-gensyms (class-name)
+  (let ((class (find-class class-name nil)))
+    (when class
+      (loop for slot in (closer-mop:class-slots (closer-mop:ensure-finalized class))
+	    append (mapcar (lambda (a) (make-symbol (symbol-name a)))
+			   (closer-mop:slot-definition-initargs slot))))))
+
 
-(defmacro define-rest-base (name (url &optional headers-or-class) &rest tree)
-  "Define group of REST endpoints starting with same `URL' prefix.
-NAME is used internally for naming a class of type `SIMPLE-REST-ENDPOINT' with parameters initialized from `ADDITIONAL-HEADERS'."
+(defmacro define-rest-base (name
+			    (url &optional headers-or-class default-initargs)
+			    &rest tree)
+  "Define group of REST endpoints starting with same URL prefix.
+
+HEADERS-OR-CLASS is a list of items, each either
+- A symbol denoting additional feature the endpoints should have
+- A cons of header name and header value (probably mostly obsoleted)
+
+The tree is list of endpoint definitions. Each definition is of form
+(NAME &optional SEGMENT &rest TREE) and is interpreted as in
+DEFINE-ENDPOINT, with BASE being inserted.
+
+Implementation: NAME is used internally for naming a class derived
+from `SIMPLE-REST-ENDPOINT' and classes describing additional features
+and with parameters initialized from `ADDITIONAL-HEADERS'.
+
+See @rest-client-features for list of features."
   (let ((additional-headers (remove-if-not #'consp headers-or-class))
 	(mixins (remove-if-not #'symbolp headers-or-class)))
     `(progn
        (defclass ,name (,@mixins simple-rest-endpoint)
 	 ()
-	 ,@(when additional-headers
+	 ,@(when (or additional-headers default-initargs)
 	     `((:default-initargs
+		,@default-initargs
 		:additional-headers ',additional-headers))))
 
        (defmethod get-uri ((e ,name)) ,url)
        ,@(mapcar (lambda (item) `(define-endpoint ,(car item) ,name ,@ (cdr item))) tree))))
 
-;;;; Converting symbols to strings
-(defun normalize-symbol (out symbol &optional colon at-sign prefix &rest args)
-  (declare (ignore args at-sign))
-  (with-input-from-string (in (symbol-name symbol))
-    (when prefix (write-char prefix out))
-    (loop with capital = colon
-	  for c =(read-char in nil nil)
-	  while c
-	  do
-	     (case c
-	       ((#\-) ;; one dash makes next char capital
-		(if capital ;; two dashes make a dash and next capital
-		    (write-char c out)
-		    (setf capital t)))
-	       ((#\.)
-		(write-char c out)
-		(setf capital t))
-	       (t (write-char (if capital (char-upcase c)
-				  (char-downcase c))
-			      out)
-		(setf capital nil))))))
+(defmacro define-endpoint (name base &optional segment &rest tree)
+  "Interface a REST API endpoint or endpoint group based on another endpoint BASE.
 
-(defmacro define-endpoint (name base &optional (segment (symbol-to-camelcase name)) &rest tree)
-  "Define a callable REST API endpoint represented by a class named `NAME' with `BASE' as a single superclass.
-SEGMENT is either
-- a string that will be added to url of base class; it may contain slashes inside, or
-- a symbol that will represent a parameter spliced to the base url
-The remaining arguments may be either
-- symbols (represent variables for HTTP parameters) or
-- conses that are interpreted as children endpoint."
+The endpoint is represented by a function NAME with keyword
+parameters. The function is exported automatically. Exception: NAME
+being _ stands for do-not-care is replaced by a gensym and not exported.
+
+It takes over most of characteristics from the BASE, and extends BASE url:
+- If SEGMENT is a string, it is attached,
+- If SEGMENT is symbol *, the string is created by camelcasing NAME.
+- If SEGMENT is another symbol, it is allowed keyword parameter and
+  its value is appended to URL (e.g., name of resource to query in the
+  path)
+
+The additional parameters in TREE are either
+- symbols that are turned to keyword parameters and used as HTTP parameters, or
+- conses that are interpreted as children endpoints - this endpoint is BASE for them.
+
+Implementation: on the background, a class with NAME is created with
+BASE the single accessor, and appropriate methods defined.
+"
   (check-type name symbol)
   (check-type base symbol)
   (check-type segment (or symbol string))
+  (if (string-equal (symbol-name name) "_")
+      (setq name (gensym "helper-class")))
+  (if (eq '* segment)
+      (setq segment (symbol-to-camelcase name)))
   (let ((subs (remove-if-not 'consp tree))
 	(pars (remove-if-not 'symbolp tree)))
     `(progn
@@ -167,11 +196,26 @@ The remaining arguments may be either
 	    `(define-item-endpoint ,name ,base ,segment)
 	    `(progn
 	       (defclass ,name (,base)
-		 ,(mapcar (lambda (par) (list par :initarg (intern (symbol-name par) :keyword) :reader (symb "GET-" par))) pars))
+		 ,(mapcar (lambda (par)
+			    (list par :initarg (intern (symbol-name par) :keyword) :reader (symb "GET-" par))) pars))
 	       (defmethod get-parameters append ((e ,name)) (declare (ignore e)) ',pars)
 	       (defmethod get-uri ((e ,name)) ,segment)))
        ,@(mapcar (lambda (item) `(define-endpoint ,(car item) ,name ,@ (cdr item))) subs)
-       (defun ,name (&rest pars) (apply #'rest-query ',name pars)))))
+       ,@(when (symbol-package name)
+	   ;; This gets complicated as I try to put parameter names as
+	   ;; arguments, so that the IDE can offer them when function is used.
+	   ;;
+	   ;; Apart from this the whole eval-when is equivalent to
+	   #+olddef (defun ,name (&rest pars)
+		      (apply #'rest-query ',name pars))
+	   `((eval-when (:execute :load-toplevel)
+	       (macrolet ((d (name)
+			     (let ((pars (calculate-initializers-as-gensyms ',name)))
+			       `(defun ,name (&rest pars &key ,@pars &allow-other-keys)
+				  (declare (ignorable ,@pars))
+				  (apply #'rest-query ',name pars)))))
+		  (d ,name)))
+	     (export ',name))))))
 
 (defmacro define-item-endpoint (name base var-name)
   "Define endpoint that represents a name in variable"
@@ -186,12 +230,17 @@ The remaining arguments may be either
        (defmethod get-uri ((e ,name)) (,(symb "GET-" var-name) e)))))
 
 (defclass auth-header-mixin ()
-  ()
-  (:documentation "Use this mixin to provide Authorization: <secret> header.
-Secret is taken from ~/.authinfo (and cached)."))
+  ((auth-header-name :accessor get-auth-header-name :initarg :auth-header-name
+		:allocation :class))
+  (:documentation
+   "Use this mixin to provide Authorization: <secret> header.  Secret is
+taken from ~/.authinfo under "api" login (and cached).
+
+The name of the header name can be changed by :auth-header-name.")
+  (:default-initargs :auth-header-name "Authorization"))
 
 (defmethod get-additional-headers :around ((o auth-header-mixin))
-  (acons "Authorization" (get-authinfo (puri:uri-host (puri:parse-uri (wt::get-uri o))) "api")
+  (acons (get-auth-header-name o) (get-authinfo (puri:uri-host (puri:parse-uri (wt::get-uri o))) "api")
 		 (call-next-method)))
 
 (defclass bearer-header-mixin ()
@@ -218,8 +267,11 @@ Secret is taken from ~/.authinfo (and cached)."))
       (cl-json:encode-json-to-string as-json))))
 
 (defmethod post-process ((o json-content-mixin) body)
-  (let ((json  (cl-json:decode-json-from-string body)))
-    json))
+  (restart-case
+      (let ((json  (cl-json:decode-json-from-string body)))
+	json)
+    (print-raw () (with-standard-io-syntax
+		    (print body)))))
 
 (define-condition json-api-error (simple-error)
   ((code    :accessor get-code    :initarg :code)

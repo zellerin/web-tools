@@ -1,4 +1,4 @@
-(cl:defpackage #:web-tools-test
+(cz.zellerin.doc:defpackage #:web-tools-test
   (:use #:cl #:wt #:lisp-unit #:lol #:cl-html-parse))
 
 (in-package web-tools-test)
@@ -30,8 +30,8 @@
 (setq *default-zone-id* (get-authinfo "api.cloudflare.com" "zoneid"))
 
 (lisp-unit:define-test cloudflare
-  (lisp-unit:assert-true (rest-query 'cloudflare-zone-records))
-  (lisp-unit:assert-error 'json-api-error (rest-query 'cloudflare-zones)))
+  (lisp-unit:assert-true (cloudflare-zone-records))
+  (lisp-unit:assert-error 'json-api-error (cloudflare-zones)))
 
 (lisp-unit:define-test normalize-symbols
     (lisp-unit:assert-true
