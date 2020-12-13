@@ -152,7 +152,7 @@ See @rest-client-features for list of features."
        (defmethod get-uri ((e ,name)) ,url)
        ,@(mapcar (lambda (item) `(define-endpoint ,(car item) ,name ,@ (cdr item))) tree))))
 
-(defmacro define-endpoint (name base &optional segment &rest tree)
+(defmacro define-endpoint (name base &optional (segment '*) &rest tree)
   "Interface a REST API endpoint or endpoint group based on another endpoint BASE.
 
 The endpoint is represented by a function NAME with keyword
